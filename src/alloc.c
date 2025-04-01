@@ -137,7 +137,15 @@ void *coalesce(free_block *block) {
  * @return A pointer to the allocated memory
  */
 void *do_alloc(size_t size) {
-    return NULL;
+    // If no suitable block is found, allocate memory from OS
+    return malloc(size);
+    //free_block *new_block = (free_block *)sbrk(size + sizeof(free_block));
+    //if (new_block == (void *)-1) {
+    //    return NULL;
+    //}
+//
+    //new_block->size = size;
+    //return (char *)new_block + sizeof(free_block);
 }
 
 /**
@@ -147,6 +155,40 @@ void *do_alloc(size_t size) {
  * @return A pointer to the requested block of memory
  */
 void *tumalloc(size_t size) {
+    size = (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+
+    free_block *best_fit = NULL;
+    free_block *prev = NULL;
+    free_block *curr = HEAD;
+    free_block *best_fit_prev = NULL;
+
+    // Find the best-fit block
+    while (curr) {
+        if (curr->size >= size) {
+            if (!best_fit || curr->size < best_fit->size) {
+                best_fit = curr;
+                best_fit_prev = prev;
+            }
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+
+    // If a suitable block is found, allocate from it
+    if (best_fit) {
+        if (best_fit->size >= size + sizeof(free_block) + ALIGNMENT) {
+            split(best_fit, size);
+        } else {
+            // Remove from free list
+            if (best_fit_prev) {
+                best_fit_prev->next = best_fit->next;
+            } else {
+                HEAD = best_fit->next;
+            }
+        }
+        return (char *)best_fit + sizeof(free_block);
+    }
+
     return NULL;
 }
 
@@ -178,5 +220,30 @@ void *turealloc(void *ptr, size_t new_size) {
  * @param ptr Pointer to the allocated piece of memory
  */
 void tufree(void *ptr) {
+    if (!ptr) {
+        return; // Ignore NULL pointers
+    }
 
+    // Get the free_block metadata by moving back from the user pointer
+    free_block *block = (free_block *)((char *)ptr - sizeof(free_block));
+
+    // Insert into free list in sorted order
+    free_block *curr = HEAD;
+    free_block *prev = NULL;
+
+    while (curr && (char *)curr < (char *)block) {
+        prev = curr;
+        curr = curr->next;
+    }
+
+    // Insert block into the list
+    block->next = curr;
+    if (prev) {
+        prev->next = block;
+    } else {
+        HEAD = block;
+    }
+
+    // Coalesce adjacent free blocks to reduce fragmentation
+    coalesce(block);
 }
