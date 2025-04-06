@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "alloc.h"
 
 #include <stddef.h>
@@ -136,16 +137,22 @@ void *coalesce(free_block *block) {
  * @param size The amount of memory to allocate
  * @return A pointer to the allocated memory
  */
+//Making And initializing Linked list and adress
 void *do_alloc(size_t size) {
-    // If no suitable block is found, allocate memory from OS
-    return malloc(size);
-    //free_block *new_block = (free_block *)sbrk(size + sizeof(free_block));
-    //if (new_block == (void *)-1) {
-    //    return NULL;
-    //}
-//
-    //new_block->size = size;
-    //return (char *)new_block + sizeof(free_block);
+    //point to memory allocation
+    //printf("4\n");
+    void* p = sbrk(0);
+    //align
+    intptr_t align = (intptr_t)p&(ALIGNMENT-1);
+    intptr_t ag = (align == 0)?0:ALIGNMENT - align;
+
+    void *mem = sbrk(size + ag + sizeof(header)); //sbrk returns mem 
+    if (mem == (void *)-1) return NULL; // sbrk fails return NULL
+    void* head = (void*)((intptr_t)mem + ag);
+    header *block = (header*)head;
+    block-> size = size;
+    block-> magic = 0x01234567;
+    return head + sizeof(header);
 }
 
 /**
@@ -154,16 +161,21 @@ void *do_alloc(size_t size) {
  * @param size The amount of memory to allocate
  * @return A pointer to the requested block of memory
  */
+//adding an dchanging linked list
+
 void *tumalloc(size_t size) {
     size = (size + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+    //printf("1\n");
 
     free_block *best_fit = NULL;
     free_block *prev = NULL;
     free_block *curr = HEAD;
     free_block *best_fit_prev = NULL;
 
-    // Find the best-fit block
-    while (curr) {
+    //printf("The address of HEAD is: %p\n", (void*)HEAD);
+
+    // Traverse the free list to find the best fit
+    while (curr != NULL) {
         if (curr->size >= size) {
             if (!best_fit || curr->size < best_fit->size) {
                 best_fit = curr;
@@ -176,21 +188,26 @@ void *tumalloc(size_t size) {
 
     // If a suitable block is found, allocate from it
     if (best_fit) {
-        if (best_fit->size >= size + sizeof(free_block) + ALIGNMENT) {
-            split(best_fit, size);
+        // Remove best_fit from the free list as you're using it
+        if (best_fit_prev) {
+            best_fit_prev->next = best_fit->next;
         } else {
-            // Remove from free list
-            if (best_fit_prev) {
-                best_fit_prev->next = best_fit->next;
-            } else {
-                HEAD = best_fit->next;
-            }
+            HEAD = best_fit->next;
         }
-        return (char *)best_fit + sizeof(free_block);
+    
+        header *h = (header *)best_fit;
+        h->size = size;
+        h->magic = 0x01234567;
+    
+        return (void *)(h + 1);
     }
 
-    return NULL;
+    // No suitable block found — do a fresh allocation
+    //printf("3\n");
+    int *ptr = do_alloc(size);
+    return ptr;
 }
+
 
 /**
  * Allocates and initializes a list of elements for the end user
@@ -200,7 +217,20 @@ void *tumalloc(size_t size) {
  * @return A pointer to the requested block of initialized memory
  */
 void *tucalloc(size_t num, size_t size) {
-    return NULL;
+    size_t total_size = num * size;
+
+    // Optional: check for overflow
+    if (size != 0 && total_size / size != num) {
+        return NULL;
+    }
+
+    void *ptr = tumalloc(total_size);
+    if (!ptr) {
+        return NULL;
+    }
+
+    memset(ptr, 0, total_size);
+    return ptr;
 }
 
 /**
@@ -211,7 +241,26 @@ void *tucalloc(size_t num, size_t size) {
  * @return A new pointer containing the contents of ptr, but with the new_size
  */
 void *turealloc(void *ptr, size_t new_size) {
-    return NULL;
+    //printf("Error turealloc 1\n");
+    void *re = tumalloc(new_size);
+    if (re == NULL){
+        //printf("Error turealloc 2\n");
+        return NULL;
+    }
+    header *cur = (header *)(ptr - sizeof(header));
+
+    if(cur -> magic == 0x01234567) {
+        //printf("Error turealloc 3\n");
+        memcpy(re, ptr, cur -> size);
+        tufree(ptr);
+        return re;
+    }
+
+    else {
+        //printf("Error with Magic\n");
+        tufree(re);
+        return NULL;
+    }
 }
 
 /**
@@ -220,30 +269,16 @@ void *turealloc(void *ptr, size_t new_size) {
  * @param ptr Pointer to the allocated piece of memory
  */
 void tufree(void *ptr) {
-    if (!ptr) {
-        return; // Ignore NULL pointers
-    }
+    header *cur1 = (header *)ptr - 1;
 
-    // Get the free_block metadata by moving back from the user pointer
-    free_block *block = (free_block *)((char *)ptr - sizeof(free_block));
+    if (cur1->magic == 0x01234567) {
+        
+        free_block *block = (free_block *)cur1;
+        block->size = cur1->size;
+        block->next = HEAD;
+        HEAD = coalesce(block);
 
-    // Insert into free list in sorted order
-    free_block *curr = HEAD;
-    free_block *prev = NULL;
-
-    while (curr && (char *)curr < (char *)block) {
-        prev = curr;
-        curr = curr->next;
-    }
-
-    // Insert block into the list
-    block->next = curr;
-    if (prev) {
-        prev->next = block;
     } else {
-        HEAD = block;
+        return;  
     }
-
-    // Coalesce adjacent free blocks to reduce fragmentation
-    coalesce(block);
 }
